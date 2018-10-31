@@ -1,0 +1,52 @@
+<?xml version="1.0"?>
+<!-- -->
+<project name="build" default="all">
+    <!--<property name="dbdriver" location="dbdriver/mysql-connector-java-5.1.44-bin.jar" /> -->
+    <property name="platformhome" location="hybris/bin/platform"/>
+    <property name="HYBRIS_HOME" location="hybris"/>
+    <property name="HYBRIS_BIN_DIR" location="${HYBRIS_HOME}/bin" />
+    <property name="HYBRIS_CONFIG_DIR" location="${HYBRIS_HOME}/config" />
+    <property name="HYBRIS_TEMP_DIR" location="${HYBRIS_HOME}/temp/hybris" />
+    <property name="environment" value="local"/>
+    <property name="PREF_LOCAL_CLASSIC_CONFIG" value="false" />
+    <property name="HYBRIS_ENV_CONFIG_DIR" location="${HYBRIS_HOME}/env/${environment}"/>
+    <property name="HYBRIS_COMMON_CONFIG_DIR" location="${HYBRIS_HOME}/env/common"/>
+    <property name="template" value="develop"/>
+    <property name="hybris.zip.package.src" location="/app/hybrisSuiteInstaller/HYBRISCOMM6300P_9-70002554.ZIP" />
+    <available file="${platformhome}/build.xml" property="platformPresent"/>
+    <echo>-------------------------------------------------------------------------------</echo>
+    <echo>ENVIRONMENT: ${environment}</echo>
+    <echo>platformhome: ${platformhome}</echo>
+    <echo>-------------------------------------------------------	------------------------</echo>
+
+    <macrodef name="config" description="Updates the configuration">
+         <sequential>
+               <available file="${hybris.zip.package.src}" property="hybrisZipPresent" />
+               <fail message="Hybris commerce suite zip file missing! Please define a valid value for hybris.zip.package.src">
+                  <condition>
+                     <not>
+                        <isset property="hybrisZipPresent" /> 
+                     </not>
+                  </condition>
+               </fail> 
+               <echo>Extracting ant contrib from platform </echo>
+               <unzip src="${hybris.zip.package.src}" dest="."> 
+                  <patternset> 
+                     <include name="hybris/bin/platform/lib/ant-contrib-*.jar"/> 
+                  </patternset> 
+               </unzip> 
+               <echo>Extracting of ant contrib done!</echo>
+               <ant dir="build" antfile="prepare.xml" target="envconfig" />
+         </sequential>
+    </macrodef>
+    
+    <config />
+    
+    <import file="build/prepare.xml" /> 
+    <import file="build/install_upgrade.xml" />
+    <import file="build/production.xml" />
+    <import file="build/hybris_build_targets.xml" />
+
+   
+
+</project>
