@@ -1,0 +1,324 @@
+Parameters:
+  BranchName:
+    Description: CodeCommit branch name
+    Type: String
+    Default: master
+  RepositoryNameApplication:
+    Description: CodeCommit Application repository name
+    Type: String
+    Default: devops-app
+  RepositoryNameEKS:
+    Description: CodeCommit EKS Manifests repository name
+    Type: String
+    Default: devops-eks    
+  DockerRepositoryName:
+    Description: Container registry repository name
+    Type: String
+    Default: devops-app
+
+Resources:
+  RepositoryNameApp:
+    Type: AWS::CodeCommit::Repository
+    Properties: 
+      RepositoryDescription: String
+      RepositoryName: !Ref RepositoryNameApplication
+
+  RepositoryNameYAML:
+    Type: AWS::CodeCommit::Repository
+    Properties: 
+      RepositoryDescription: String
+      RepositoryName: !Ref RepositoryNameEKS
+
+  EcrRepository:
+    Type: AWS::ECR::Repository
+    DeletionPolicy: Retain
+    Properties:
+      RepositoryName: !Ref DockerRepositoryName
+
+  CodePipelineArtifactBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+
+  CodePipelineArtifactBucketPolicy:
+    Type: 'AWS::S3::BucketPolicy'
+    Properties:
+      Bucket: !Ref CodePipelineArtifactBucket
+      PolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Sid: DenyUnEncryptedObjectUploads
+            Effect: Deny
+            Principal: '*'
+            Action: 's3:PutObject'
+            Resource: !Join 
+              - ''
+              - - !GetAtt 
+                  - CodePipelineArtifactBucket
+                  - Arn
+                - /*
+            Condition:
+              StringNotEquals:
+                's3:x-amz-server-side-encryption': 'aws:kms'
+          - Sid: DenyInsecureConnections
+            Effect: Deny
+            Principal: '*'
+            Action: 's3:*'
+            Resource: !Join 
+              - ''
+              - - !GetAtt 
+                  - CodePipelineArtifactBucket
+                  - Arn
+                - /*
+            Condition:
+              Bool:
+                'aws:SecureTransport': false
+  AmazonCloudWatchEventRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      RoleName: !Join 
+            - ''
+            - - !Ref RepositoryNameApplication
+              - '-CWEventRole'
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - events.amazonaws.com
+            Action: 'sts:AssumeRole'
+      Path: /
+      Policies:
+        - PolicyName: cwe-pipeline-policy
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action: 'codepipeline:StartPipelineExecution'
+                Resource: !Join 
+                  - ''
+                  - - 'arn:aws:codepipeline:'
+                    - !Ref 'AWS::Region'
+                    - ':'
+                    - !Ref 'AWS::AccountId'
+                    - ':'
+                    - !Ref AppPipeline
+  AmazonEventBridgeRule:
+    Type: 'AWS::Events::Rule'
+    Properties:
+      Name: !Join 
+            - ''
+            - - !Ref RepositoryNameApplication
+              - '-EventRule'
+      EventPattern:
+        source:
+          - aws.codecommit
+        resources:
+          - !Join 
+            - ''
+            - - 'arn:aws:codecommit:'
+              - !Ref 'AWS::Region'
+              - ':'
+              - !Ref 'AWS::AccountId'
+              - ':'
+              - !Ref RepositoryNameApplication
+        detail:
+          event:
+            - pullRequestMergeStatusUpdated
+          isMerged:
+            - 'True'
+          pullRequestStatus:
+            - 'Closed'
+          destinationReference:
+            - !Join 
+              - ''
+              - - 'refs/heads/'
+                - !Ref BranchName
+          repositoryNames:
+            - !Ref RepositoryNameApplication
+      Targets:
+        - Arn: !Join 
+            - ''
+            - - 'arn:aws:codepipeline:'
+              - !Ref 'AWS::Region'
+              - ':'
+              - !Ref 'AWS::AccountId'
+              - ':'
+              - !Ref AppPipeline
+          RoleArn: !GetAtt 
+            - AmazonCloudWatchEventRole
+            - Arn
+          Id: codepipeline-AppPipeline
+
+  CodePipelineServiceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Join 
+            - ''
+            - - !Ref RepositoryNameApplication
+              - '-CodePipelineRole'
+      Path: /
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: codepipeline.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: codepipeline-policy
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Resource: "*"
+                Effect: Allow
+                Action:
+                  - codebuild:StartBuild
+                  - codebuild:BatchGetBuilds
+                  - codecommit:GetBranch
+                  - codecommit:GetCommit
+                  - codecommit:UploadArchive
+                  - codecommit:GetUploadArchiveStatus
+                  - codecommit:CancelUploadArchive
+                  - iam:PassRole
+              - Resource: !Sub arn:aws:s3:::${CodePipelineArtifactBucket}/*
+                Effect: Allow
+                Action:
+                  - s3:PutObject
+                  - s3:GetObject
+                  - s3:GetObjectVersion
+                  - s3:GetBucketVersioning
+    DependsOn: CodePipelineArtifactBucket
+
+  CodeBuildServiceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Join 
+            - ''
+            - - !Ref RepositoryNameApplication
+              - '-CodeBuildRole'
+      Path: /
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: codebuild.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: codebuild-policy
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Resource: '*'
+                Effect: Allow
+                Action:
+                  - eks:Describe*
+              - Resource: '*'
+                Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+              - Resource: '*'
+                Effect: Allow
+                Action:
+                  - ecr:GetAuthorizationToken
+              - Resource: '*'
+                Effect: Allow
+                Action:
+                  - ec2:CreateNetworkInterface
+                  - ec2:DescribeDhcpOptions
+                  - ec2:DescribeNetworkInterfaces
+                  - ec2:DeleteNetworkInterface
+                  - ec2:DescribeSubnets
+                  - ec2:DescribeSecurityGroups
+                  - ec2:DescribeVpcs
+                  - ec2:CreateNetworkInterfacePermission
+              - Resource: !Sub arn:aws:s3:::${CodePipelineArtifactBucket}/*
+                Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                  - s3:GetObjectVersion
+              - Resource: !Sub arn:aws:ecr:${AWS::Region}:${AWS::AccountId}:repository/${EcrRepository}
+                Effect: Allow
+                Action:
+                  - ecr:GetDownloadUrlForLayer
+                  - ecr:BatchGetImage
+                  - ecr:BatchCheckLayerAvailability
+                  - ecr:PutImage
+                  - ecr:InitiateLayerUpload
+                  - ecr:UploadLayerPart
+                  - ecr:CompleteLayerUpload
+
+  CodeBuildProject:
+    Type: 'AWS::CodeBuild::Project'
+    Properties:
+      Artifacts:
+        Type: CODEPIPELINE
+      Source:
+        Type: CODEPIPELINE
+      Environment:
+        ComputeType: BUILD_GENERAL1_SMALL
+        Type: LINUX_CONTAINER
+        Image: "aws/codebuild/standard:5.0"
+        PrivilegedMode: True
+        EnvironmentVariables:
+          - Name: IMAGE_REPO_NAME
+            Value: !Ref RepositoryNameApplication
+          - Name: REPOSITORY_BRANCH
+            Value: !Ref BranchName
+          - Name: AWS_DEFAULT_REGION
+            Value: !Ref AWS::Region
+          - Name: AWS_ACCOUNT_ID
+            Value: !Ref AWS::AccountId
+      Name: !Join 
+            - ''
+            - - !Ref RepositoryNameApplication
+              - '-Project'
+      ServiceRole: !GetAtt CodeBuildServiceRole.Arn
+
+  AppPipeline:
+    Type: AWS::CodePipeline::Pipeline
+    Properties:
+      Name: !Join 
+            - ''
+            - - !Ref RepositoryNameApplication
+              - '-pipeline'
+      RoleArn: !GetAtt CodePipelineServiceRole.Arn
+      ArtifactStore:
+        Type: S3
+        Location: !Ref CodePipelineArtifactBucket
+      Stages:
+        - Name: Source
+          Actions:
+            - Name: SourceAction
+              ActionTypeId:
+                Category: Source
+                Owner: AWS
+                Version: 1
+                Provider: CodeCommit
+              OutputArtifacts:
+                - Name: SourceArtifact
+              Configuration:
+                BranchName: !Ref BranchName
+                RepositoryName: !Ref RepositoryNameApplication
+                PollForSourceChanges: false
+              RunOrder: 1
+        - Name: Build
+          Actions:
+            - Name: Build
+              ActionTypeId:
+                Category: Build
+                Owner: AWS
+                Version: 1
+                Provider: CodeBuild
+              Configuration:
+                ProjectName: !Ref CodeBuildProject
+              InputArtifacts:
+                - Name: SourceArtifact
+              OutputArtifacts:
+                - Name: BuildOutput
+              RunOrder: 1
+    DependsOn: CodeBuildProject
